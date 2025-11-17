@@ -40,6 +40,20 @@ def fit_tlearner_logreg(
     return scaler, clf_t0, clf_t1
 
 
+def compute_nonconformity_scores(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    score_type: str = "residual",
+) -> np.ndarray:
+    if score_type == "residual":
+        return np.abs(y_true - y_prob)
+    if score_type == "nll":
+        eps = 1e-6
+        p = np.clip(y_prob, eps, 1.0 - eps)
+        return -(y_true * np.log(p) + (1.0 - y_true) * np.log(1.0 - p))
+    raise ValueError(f"Unknown score_type: {score_type}")
+
+
 def compute_conformal_scores(
     scaler: StandardScaler,
     clf_t0: LogisticRegression,
@@ -47,6 +61,7 @@ def compute_conformal_scores(
     X_calib: pd.DataFrame,
     t_calib: pd.Series,
     y_calib: pd.Series,
+    score_type: str = "residual",
 ) -> Tuple[np.ndarray, np.ndarray]:
     X_calib_scaled = scaler.transform(X_calib)
 
@@ -61,8 +76,16 @@ def compute_conformal_scores(
     if mask_t1_calib.any():
         y_prob_calib_t1[mask_t1_calib] = clf_t1.predict_proba(X_calib_scaled[mask_t1_calib])[:, 1]
 
-    scores_t0 = np.abs(y_calib[mask_t0_calib].to_numpy() - y_prob_calib_t0[mask_t0_calib])
-    scores_t1 = np.abs(y_calib[mask_t1_calib].to_numpy() - y_prob_calib_t1[mask_t1_calib])
+    scores_t0 = compute_nonconformity_scores(
+        y_true=y_calib[mask_t0_calib].to_numpy(),
+        y_prob=y_prob_calib_t0[mask_t0_calib],
+        score_type=score_type,
+    )
+    scores_t1 = compute_nonconformity_scores(
+        y_true=y_calib[mask_t1_calib].to_numpy(),
+        y_prob=y_prob_calib_t1[mask_t1_calib],
+        score_type=score_type,
+    )
 
     return scores_t0, scores_t1
 
@@ -77,6 +100,7 @@ def tlearner_conformal_potential_outcomes(
     X_test: pd.DataFrame,
     t_test: pd.Series,
     alpha: float = 0.1,
+    score_type: str = "residual",
 ) -> Dict[str, Any]:
     scaler, clf_t0, clf_t1 = fit_tlearner_logreg(X_train, t_train, y_train)
 
@@ -87,6 +111,7 @@ def tlearner_conformal_potential_outcomes(
         X_calib=X_calib,
         t_calib=t_calib,
         y_calib=y_calib,
+        score_type=score_type,
     )
 
     q0 = conformal_quantile(scores_t0, alpha)
@@ -96,10 +121,18 @@ def tlearner_conformal_potential_outcomes(
     y_prob_test_t0 = clf_t0.predict_proba(X_test_scaled)[:, 1]
     y_prob_test_t1 = clf_t1.predict_proba(X_test_scaled)[:, 1]
 
-    L0 = np.clip(y_prob_test_t0 - q0, 0.0, 1.0)
-    U0 = np.clip(y_prob_test_t0 + q0, 0.0, 1.0)
-    L1 = np.clip(y_prob_test_t1 - q1, 0.0, 1.0)
-    U1 = np.clip(y_prob_test_t1 + q1, 0.0, 1.0)
+    if score_type == "residual":
+        L0 = np.clip(y_prob_test_t0 - q0, 0.0, 1.0)
+        U0 = np.clip(y_prob_test_t0 + q0, 0.0, 1.0)
+        L1 = np.clip(y_prob_test_t1 - q1, 0.0, 1.0)
+        U1 = np.clip(y_prob_test_t1 + q1, 0.0, 1.0)
+    elif score_type == "nll":
+        L0 = np.zeros_like(y_prob_test_t0)
+        U0 = np.ones_like(y_prob_test_t0)
+        L1 = np.zeros_like(y_prob_test_t1)
+        U1 = np.ones_like(y_prob_test_t1)
+    else:
+        raise ValueError(f"Unknown score_type: {score_type}")
 
     return {
         "scaler": scaler,
