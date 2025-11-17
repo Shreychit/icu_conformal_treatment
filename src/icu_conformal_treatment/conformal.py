@@ -2,7 +2,7 @@ from typing import Dict, Any, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
@@ -83,6 +83,29 @@ def fit_tlearner_xgboost(
     clf_t1.fit(X_train_scaled[mask_t1], y_train[mask_t1])
 
     return scaler, clf_t0, clf_t1
+
+
+def fit_tlearner_regression(
+    X_train: pd.DataFrame,
+    t_train: pd.Series,
+    y_train: pd.Series,
+) -> Tuple[StandardScaler, LinearRegression, LinearRegression]:
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+
+    mask_t0 = t_train == 0
+    mask_t1 = t_train == 1
+
+    if mask_t0.sum() == 0 or mask_t1.sum() == 0:
+        raise ValueError("One of the treatment groups is empty in training data")
+
+    reg_t0 = LinearRegression()
+    reg_t1 = LinearRegression()
+
+    reg_t0.fit(X_train_scaled[mask_t0], y_train[mask_t0])
+    reg_t1.fit(X_train_scaled[mask_t1], y_train[mask_t1])
+
+    return scaler, reg_t0, reg_t1
 
 
 def compute_nonconformity_scores(
@@ -229,7 +252,7 @@ def tlearner_conformal_potential_outcomes_xgb(
         L0 = np.clip(y_prob_test_t0 - q0, 0.0, 1.0)
         U0 = np.clip(y_prob_test_t0 + q0, 0.0, 1.0)
         L1 = np.clip(y_prob_test_t1 - q1, 0.0, 1.0)
-        U1 = np.clip(y_prob_test_t1 + q1, 0.0, 1.0)
+        U1 = np.clip	y_prob_test_t1 + q1, 0.0, 1.0)
     elif score_type == "nll":
         L0 = np.zeros_like(y_prob_test_t0)
         U0 = np.ones_like(y_prob_test_t0)
@@ -246,6 +269,71 @@ def tlearner_conformal_potential_outcomes_xgb(
         "q1": q1,
         "y_prob_test_t0": y_prob_test_t0,
         "y_prob_test_t1": y_prob_test_t1,
+        "L0": L0,
+        "U0": U0,
+        "L1": L1,
+        "U1": U1,
+    }
+
+
+def tlearner_conformal_potential_outcomes_regression(
+    X_train: pd.DataFrame,
+    t_train: pd.Series,
+    y_train: pd.Series,
+    X_calib: pd.DataFrame,
+    t_calib: pd.Series,
+    y_calib: pd.Series,
+    X_test: pd.DataFrame,
+    t_test: pd.Series,
+    alpha: float = 0.1,
+    score_type: str = "residual",
+) -> Dict[str, Any]:
+    scaler, reg_t0, reg_t1 = fit_tlearner_regression(X_train, t_train, y_train)
+
+    X_calib_scaled = scaler.transform(X_calib)
+    y_hat_calib_t0 = reg_t0.predict(X_calib_scaled)
+    y_hat_calib_t1 = reg_t1.predict(X_calib_scaled)
+
+    mask_t0_calib = t_calib == 0
+    mask_t1_calib = t_calib == 1
+
+    scores_t0 = compute_nonconformity_scores(
+        y_true=y_calib[mask_t0_calib].to_numpy(),
+        y_prob=y_hat_calib_t0[mask_t0_calib],
+        score_type=score_type,
+    )
+    scores_t1 = compute_nonconformity_scores(
+        y_true=y_calib[mask_t1_calib].to_numpy(),
+        y_prob=y_hat_calib_t1[mask_t1_calib],
+        score_type=score_type,
+    )
+
+    q0 = conformal_quantile(scores_t0, alpha)
+    q1 = conformal_quantile(scores_t1, alpha)
+
+    X_test_scaled = scaler.transform(X_test)
+    y_hat_test_t0 = reg_t0.predict(X_test_scaled)
+    y_hat_test_t1 = reg_t1.predict(X_test_scaled)
+
+    y_hat_test_t0 = np.clip(y_hat_test_t0, 0.0, 1.0)
+    y_hat_test_t1 = np.clip(y_hat_test_t1, 0.0, 1.0)
+
+    if score_type == "residual":
+        L0 = np.clip(y_hat_test_t0 - q0, 0.0, 1.0)
+        U0 = np.clip(y_hat_test_t0 + q0, 0.0, 1.0)
+        L1 = np.clip(y_hat_test_t1 - q1, 0.0, 1.0)
+        U1 = np.clip(y_hat_test_t1 + q1, 0.0, 1.0)
+    else:
+        raise ValueError(f"Unsupported score_type for regression: {score_type}")
+
+    return {
+        "scaler": scaler,
+        "clf_t0": reg_t0,
+        "clf_t1": reg_t1,
+        "q0": q0,
+        "q1": q1,
+        "y_prob_test_t0": y_hat_test_t0,
+        "y_prob_test_t1": y_hat_test_t1,
         "L0": L0,
         "U0": U0,
         "L1": L1,
@@ -274,7 +362,13 @@ def dominance_policy_metrics(
     coverage_factual = ((y_test_arr >= factual_L) & (y_test_arr <= factual_U)).mean()
 
     y_prob_factual = np.where(t_test_arr == 0, y_prob_test_t0, y_prob_test_t1)
-    auc_factual = roc_auc_score(y_test_arr, y_prob_factual)
+    try:
+        if np.unique(y_test_arr).shape[0] > 1:
+            auc_factual = roc_auc_score(y_test_arr, y_prob_factual)
+        else:
+            auc_factual = float("nan")
+    except Exception:
+        auc_factual = float("nan")
 
     choose_t1 = U1 < L0
     choose_t0 = U0 < L1
