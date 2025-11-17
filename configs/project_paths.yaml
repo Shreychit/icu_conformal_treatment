@@ -1,0 +1,7 @@
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+
+mimic:
+  root_dir: "data/raw/mimiciv"
+  cohort_table: "data/processed/mimiciv_cohort.parquet"
