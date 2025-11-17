@@ -3,5 +3,5 @@ data:
   processed_dir: "data/processed"
 
 mimic:
-  root_dir: "data/raw/mimiciv_demo_2_2"
+  root_dir: "data/raw/mimiciv_demo_2_2/mimic-iv-clinical-database-demo-2.2"
   cohort_table: "data/processed/mimiciv_demo_cohort.parquet"
