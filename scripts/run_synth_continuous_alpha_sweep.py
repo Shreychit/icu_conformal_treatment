@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from icu_conformal_treatment.conformal import (
-    tlearner_conformal_potential_outcomes,
+    tlearner_conformal_potential_outcomes_regression,
 )
 from icu_conformal_treatment.simulations import (
     generate_synthetic_continuous_outcome_data,
@@ -47,7 +47,7 @@ def run_synth_continuous_alpha_sweep(
     rows = []
 
     for alpha in alphas:
-        res = tlearner_conformal_potential_outcomes(
+        res = tlearner_conformal_potential_outcomes_regression(
             X_train=X_train,
             t_train=t_train,
             y_train=y_train,
@@ -64,8 +64,8 @@ def run_synth_continuous_alpha_sweep(
         U0 = res["U0"]
         L1 = res["L1"]
         U1 = res["U1"]
-        y_prob_t0 = res["y_prob_test_t0"]
-        y_prob_t1 = res["y_prob_test_t1"]
+        y_pred_t0 = res["y_prob_test_t0"]
+        y_pred_t1 = res["y_prob_test_t1"]
 
         y_test_arr = y_test.to_numpy()
 
@@ -87,11 +87,11 @@ def run_synth_continuous_alpha_sweep(
         n_t0 = int(choose_t0.sum())
         n_abstain = int(abstain.sum())
 
-        risk_prob_best = np.minimum(y_prob_t0, y_prob_t1)
+        risk_prob_best = np.minimum(y_pred_t0, y_pred_t1)
         decided_mask = ~abstain
         risk_prob_decision = np.zeros(n, dtype=float)
-        risk_prob_decision[choose_t0] = y_prob_t0[choose_t0]
-        risk_prob_decision[choose_t1] = y_prob_t1[choose_t1]
+        risk_prob_decision[choose_t0] = y_pred_t0[choose_t0]
+        risk_prob_decision[choose_t1] = y_pred_t1[choose_t1]
         if decided_mask.sum() > 0:
             pseudo_regret = risk_prob_decision[decided_mask] - risk_prob_best[decided_mask]
             mean_pseudo_regret = float(pseudo_regret.mean())
