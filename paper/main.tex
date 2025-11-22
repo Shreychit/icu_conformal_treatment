@@ -1,0 +1,256 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{bm}
+
+\title{Dominance-Based Conformal Treatment Policies for ICU Admission Decisions}
+\author{Anonymous Author}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Decisions about admission urgency and escalation of care in the intensive care unit (ICU) are high-stakes and inherently uncertain. Standard risk models estimate the probability of adverse outcomes, but they do not indicate when recommendations are reliable or when the model should abstain. We propose a dominance-based conformal treatment policy that combines individualised risk estimation with finite-sample uncertainty quantification and an explicit abstain option.
+
+Given features $X$, a binary treatment $T \in \{0,1\}$ (emergent vs non-emergent admission), and a binary outcome $Y$ (in-hospital mortality), we first estimate arm-specific risks $r_0(x), r_1(x)$ using a T-learner. We then construct conformal prediction intervals for each arm's risk by calibrating residual-based nonconformity scores on a held-out set. A simple dominance rule recommends treatment 1 when the worst-case risk for arm 1 lies below the best-case risk for arm 0, recommends treatment 0 in the symmetric case, and abstains when intervals overlap. This yields a model-agnostic policy that acts only when it can provide distribution-free guarantees on relative risk.
+
+On synthetic data with known potential outcomes, the proposed method achieves near-nominal coverage and essentially zero true regret among patients for whom it acts. On the MIMIC-IV v3 ICU cohort (65k stays), a logistic T-learner attains an AUROC of 0.76 and, at a miscoverage level $\alpha = 0.20$, the dominance policy issues recommendations for approximately 73\% of test patients while maintaining empirical coverage around 0.80 and zero model-based regret on the decided subset. In contrast, an XGBoost T-learner with higher AUROC (0.78) induces a far more conservative policy that abstains on almost all patients for practical values of $\alpha$. Subgroup analyses along age, gender, and ICU careunit reveal systematic variation in coverage and decision rates, underscoring the importance of reporting how selective policies behave across clinically meaningful strata.
+\end{abstract}
+
+\section{Introduction}
+
+Decisions about when and how aggressively to treat critically ill patients are among the most consequential in medicine. In the intensive care unit (ICU), clinicians routinely face choices such as whether to admit a patient urgently versus non-emergently, escalate or de-escalate care, or transfer between units. These decisions occur under substantial uncertainty, yet the costs of mistakes are asymmetric: overly aggressive treatment may expose patients to unnecessary risk and resource use, while overly conservative decisions may delay life-saving interventions.
+
+Over the last decade, machine learning has been widely explored for ICU risk prediction, triage, and decision support. Many models achieve high discrimination for outcomes such as mortality or prolonged length of stay, and are sometimes used to rank or prioritise patients. However, standard predictive models produce point estimates or single risk scores. They do not indicate when the model is uncertain, nor do they provide guarantees about the quality of recommendations. In high-stakes settings, a model that is unable to say ``I do not know'' can be more dangerous than helpful.
+
+At the same time, there is growing interest in individualised treatment effect estimation and policy learning from observational data. T-learners, uplift models, and related methods can estimate how risk might change under different treatment choices. Yet such methods typically output a single recommended arm (for example, ``treat'' vs ``do not treat'') without calibrated uncertainty. Clinicians are left without a principled way to know when a recommendation is reliable, and when the model should instead defer to human judgment.
+
+In this work, we combine ideas from treatment effect estimation, conformal prediction, and selective classification to construct an ICU treatment policy that acts only when it can provide distribution-free guarantees on risk and otherwise abstains. Concretely, we consider a binary treatment $T \in \{0,1\}$ (in our application, a coarse notion of emergent vs non-emergent admission) and a binary outcome $Y$ (in-hospital mortality). We estimate potential-outcome risks $r_0(x), r_1(x)$ using a T-learner, then build conformal prediction intervals for each arm's risk. A dominance-based policy recommends the arm whose worst-case risk is provably lower than the other's best-case risk; if the conformal intervals overlap, the policy abstains.
+
+This construction yields a treatment policy with several desirable properties:
+\begin{itemize}
+    \item It is \emph{model-agnostic}: any base learner capable of predicting risk can be wrapped into the conformal procedure.
+    \item It provides \emph{finite-sample coverage guarantees} for the potential-outcome risks, under standard exchangeability assumptions.
+    \item It produces a \emph{selective policy} that knows when to abstain; the abstention rate and decision coverage can be tuned by a single parameter $\alpha$.
+    \item It exposes how policy behaviour varies across patient subgroups (e.g., age, gender, ICU careunit), which is critical for fairness and deployment.
+\end{itemize}
+
+We evaluate the proposed approach on both synthetic data, where the true potential outcomes are known, and on the MIMIC-IV v3 ICU cohort, focusing on mortality under emergent versus non-emergent admission. Our empirical study leads to several observations:
+\begin{enumerate}
+    \item On synthetic benchmarks, the dominance-based conformal policy achieves near-nominal coverage and essentially zero regret among patients for whom it acts, validating the method in a controlled setting.
+    \item On MIMIC-IV v3, a simple logistic T-learner coupled with the dominance policy can make confident recommendations for a large fraction of ICU stays while maintaining high empirical coverage and low estimated regret.
+    \item A more flexible XGBoost T-learner attains higher AUROC but, under the same dominance rule, is dramatically more conservative: it abstains on almost all patients for practical values of the miscoverage parameter $\alpha$. This illustrates that improving discrimination does not automatically translate into more actionable decisions under calibrated uncertainty.
+    \item Subgroup analyses along age, gender, and careunit reveal systematic heterogeneity in coverage and decision rates, underscoring the importance of reporting not only global metrics but also how abstaining policies behave across clinically meaningful strata.
+\end{enumerate}
+
+Overall, our results suggest that conformal prediction can provide a practical, distribution-free layer of uncertainty quantification on top of standard ICU risk models, enabling treatment policies that act cautiously and transparently in the presence of uncertainty. Rather than replacing clinical judgment, such policies can highlight when the data strongly support one course of action and when the model itself recommends deferring the decision.
+
+\section{Related Work}
+
+There is extensive work on ICU risk prediction and triage models, including mortality prediction scores and machine-learning-based risk stratifiers. Parallel lines of work study uplift modelling and treatment effect estimation from observational data using T-learners, X-learners, and related architectures. More recently, conformal prediction and selective prediction have been proposed as tools for building models that provide calibrated uncertainty and know when to abstain. Our contribution is to connect these threads in the context of ICU decision support: we combine T-learner potential-outcome models with arm-specific conformal risk intervals and a dominance-based abstaining policy, and we analyse how such a policy behaves in a large, realistic ICU cohort.
+
+\section{Methods}
+
+\subsection{Problem setup}
+
+We consider a supervised treatment decision problem with features $X \in \mathcal{X} \subset \mathbb{R}^d$, a binary treatment $T \in \{0,1\}$, and an outcome $Y$. In the main clinical application, $Y \in \{0,1\}$ denotes in-hospital mortality, and $T$ encodes a coarse notion of admission urgency (0 = non-emergent, 1 = emergent/urgent). For each patient we observe a single factual outcome
+\[
+Y = Y_T,
+\]
+but not the counterfactual $Y_{1-T}$.
+
+We work in the standard potential-outcomes framework and define the potential risks
+\[
+r_t(x) = \mathbb{E}[Y_t \mid X = x], \quad t \in \{0,1\},
+\]
+which represent the conditional risk of the outcome under each treatment arm. The object of interest is the individualised treatment effect
+\[
+\tau(x) = r_1(x) - r_0(x),
+\]
+but our goal is not just to estimate $\tau(x)$: we wish to construct a treatment policy that can (i) recommend one of the two arms when the evidence is strong, and (ii) abstain when uncertainty is high, while providing distribution-free guarantees on prediction error.
+
+Formally, a (possibly abstaining) policy is a mapping
+\[
+\pi : \mathcal{X} \to \{0,1,\bot\},
+\]
+where $\pi(x) = t \in \{0,1\}$ indicates a recommendation of treatment $t$, and $\pi(x) = \bot$ indicates abstention.
+
+\subsection{T-learner for potential outcomes}
+
+We estimate the two potential-outcome functions $r_0, r_1$ using a T-learner. Given a dataset of $n$ i.i.d.\ samples $(X_i, T_i, Y_i)$, we form two treatment-specific datasets
+\[
+\mathcal{D}_t = \{(X_i, Y_i) : T_i = t\}, \quad t \in \{0,1\},
+\]
+and fit separate supervised learning models to each:
+
+\begin{itemize}
+    \item For the main clinical experiments on MIMIC-IV v3, we use logistic regression with $\ell_2$ regularisation as a simple, interpretable baseline, and XGBoost gradient-boosted trees as a more flexible non-linear baseline.
+    \item For synthetic experiments, we use logistic or linear regression depending on whether $Y$ is binary or continuous.
+\end{itemize}
+
+Given a new covariate vector $x$, the T-learner produces two risk estimates
+\[
+\hat{r}_0(x) \approx r_0(x), \qquad \hat{r}_1(x) \approx r_1(x).
+\]
+
+In all experiments, we construct a feature vector $X$ from demographics (age, gender), administrative information (admission type and location, discharge location, insurance, marital status, race), first and last ICU careunit, and simple length-of-stay statistics, with categorical variables one-hot encoded. For MIMIC-IV v3 we split the cohort into disjoint train, calibration, and test sets at the patient level. In the final cohort used here this corresponds to 39{,}219 train, 13{,}073 calibration, and 13{,}074 test ICU stays.
+
+\subsection{Conformal risk intervals per treatment arm}
+
+To obtain uncertainty-quantified predictions for each treatment arm, we build marginally valid prediction intervals for the potential risks $r_t(x)$ using conformal prediction.
+
+\subsubsection{Nonconformity scores}
+
+For each arm $t \in \{0,1\}$, we restrict to the calibration subset with $T_i = t$,
+\[
+\mathcal{C}_t = \{(X_i, Y_i) : T_i = t \text{ and } i \in \mathcal{I}_\text{calib}\}.
+\]
+We then define a residual-based nonconformity score
+\[
+S_t(X_i, Y_i) = \bigl|Y_i - \hat{r}_t(X_i)\bigr|.
+\]
+
+For binary outcomes, $Y_i \in \{0,1\}$ and $\hat{r}_t(X_i)$ denotes the predicted risk $\mathbb{P}(Y=1 \mid X_i, T=t)$. For continuous-outcome synthetic experiments, $Y_i \in \mathbb{R}$ and $\hat{r}_t(X_i)$ is a real-valued regression prediction.
+
+\subsubsection{Calibration and interval construction}
+
+Fix a target miscoverage level $\alpha \in (0,1)$. For each arm $t$, we compute the empirical $(1-\alpha)$-quantile of the scores
+\[
+q_t(\alpha) = \text{Quantile}_{1-\alpha} \{ S_t(X_i, Y_i) : (X_i, Y_i) \in \mathcal{C}_t \}.
+\]
+The conformal prediction interval for the arm-$t$ risk at a new point $x$ is then
+\[
+[L_t(x), U_t(x)] = \left[ \hat{r}_t(x) - q_t(\alpha),\; \hat{r}_t(x) + q_t(\alpha) \right],
+\]
+clipped to the feasible range of $Y$. For binary outcomes we enforce
+\[
+L_t(x) \leftarrow \max\{0, L_t(x)\}, \qquad U_t(x) \leftarrow \min\{1, U_t(x)\},
+\]
+so that the interval lies in $[0,1]$. For continuous synthetic experiments we apply symmetric clipping as appropriate to the simulated outcome range.
+
+Under standard exchangeability assumptions, this construction yields marginal coverage guarantees:
+\[
+\mathbb{P}\bigl( r_t(X) \in [L_t(X), U_t(X)] \bigr) \geq 1 - \alpha, \quad \text{for } t \in \{0,1\},
+\]
+where the probability is over the joint distribution of training, calibration, and test samples.
+
+In practice, we instantiate this separately for each arm using the T-learner's fitted models and the held-out calibration split.
+
+\subsection{Dominance-based treatment policy}
+
+Given per-arm risk intervals $[L_0(x), U_0(x)]$ and $[L_1(x), U_1(x)]$, we define a dominance-based conformal treatment policy $\pi_\alpha$ that:
+\begin{itemize}
+    \item recommends treatment 1 when arm 1 is uniformly safer than arm 0;
+    \item recommends treatment 0 when arm 0 is uniformly safer than arm 1;
+    \item abstains otherwise.
+\end{itemize}
+
+Concretely,
+\[
+\pi_\alpha(x) =
+\begin{cases}
+1, & \text{if } U_1(x) < L_0(x), \\
+0, & \text{if } U_0(x) < L_1(x), \\
+\bot, & \text{otherwise}.
+\end{cases}
+\]
+
+Intuitively, the policy acts only when one arm's worst-case risk is provably below the other arm's best-case risk, according to the conformal intervals. When the intervals overlap, the evidence is insufficient to claim dominance, and the policy abstains.
+
+\subsection{Evaluation metrics and protocol}
+
+For the underlying risk models we report AUROC and Brier score on the held-out test set. For the conformal intervals we track factual coverage, mean interval width per arm, and for the policy we track decision fraction, abstention rate, and the split of decisions between arms.
+
+To quantify the quality of decisions when the policy does act, we define regret. In synthetic experiments, where the true potential risks $r_0(x), r_1(x)$ are known, the true regret on a decided point with $\pi_\alpha(x) = t$ is
+\[
+\text{regret}_\text{true}(x) = r_t(x) - \min\{r_0(x), r_1(x)\} \ge 0.
+\]
+In MIMIC-IV v3, ground-truth potential outcomes are not observable, so we use a pseudo-regret based on the T-learner's risk estimates,
+\[
+\text{regret}_\text{pseudo}(x) = \hat{r}_t(x) - \min\{\hat{r}_0(x), \hat{r}_1(x)\}.
+\]
+We summarise regret on the decided subset via its mean, 90th percentile, and maximum.
+
+All experiments follow a consistent protocol: (i) split data into disjoint train, calibration, and test subsets at the patient level; (ii) fit T-learner models on the train split; (iii) calibrate conformal scores on the calibration split for a grid of $\alpha$; and (iv) evaluate policy behaviour on the held-out test split, both globally and within subgroups (age bands, gender, careunit).
+
+\section{Results}
+
+\subsection{Synthetic calibration experiments}
+
+We first evaluated the proposed dominance-based conformal treatment policy on synthetic data where the true potential outcomes are known. In a binary-outcome setup, we generated paired potential risks $(r_0(x), r_1(x))$ and simulated factual outcomes under a fixed treatment assignment. A logistic T-learner was used to estimate the two potential outcome models, and residual-based nonconformity scores were calibrated separately for each arm.
+
+Across miscoverage levels $\alpha \in \{0.01, 0.05, 0.10, 0.20, 0.30, 0.40, 0.50\}$, the resulting marginal prediction intervals achieved empirical factual coverage close to the target $1-\alpha$ and exhibited the expected decrease in mean interval width as $\alpha$ increased. When we instantiated the dominance rule---treat with arm 1 if the upper bound for arm 1 lies below the lower bound for arm 0, and conversely for arm 0---the policy abstained whenever the intervals overlapped.
+
+On this synthetic benchmark, the true regret (computed using the known $(r_0, r_1)$) among patients for whom the policy made a decision was essentially zero across all $\alpha$: the policy either chose the truly better arm or abstained. An analogous continuous-outcome experiment, using squared-error residuals and a regression T-learner, showed the same pattern: good coverage, shrinking intervals with larger $\alpha$, and vanishing regret on the decided subset. These simulations validate that, under well-specified models, the dominance-based conformal policy behaves as intended.
+
+\subsection{ICU mortality under emergent vs non-emergent admission (MIMIC-IV v3)}
+
+We then applied the method to the MIMIC-IV v3 clinical database, focusing on adult ICU stays. For each ICU admission we constructed a feature vector including demographics (age, gender), administrative information (admission type and location, admission and discharge destination, insurance, marital status, race), first ICU careunit, and simple length-of-stay statistics, and defined a binary outcome indicating in-hospital mortality. The treatment variable was a coarse indicator of admission urgency, equal to one for emergent or urgent admissions and zero for non-emergent types.
+
+A logistic T-learner trained on 65k ICU stays achieved an AUROC of approximately 0.76 and a Brier score of 0.089 on the held-out test cohort of 13{,}074 stays. Despite its simplicity, this baseline provides reasonably calibrated risk estimates. We then calibrated conformal intervals for each treatment arm separately using a held-out calibration set, and applied the dominance policy on the test set.
+
+Figure~\ref{fig:coverage-alpha} (left) shows factual coverage as a function of the miscoverage level $\alpha$. For both the logistic and XGBoost T-learners, the coverage curve closely follows the $1-\alpha$ target, indicating that the conformal construction itself is robust to the choice of base model. The more interesting behaviour appears in the decision rate (Figure~\ref{fig:coverage-alpha}, right). For the logistic T-learner, the decision fraction is essentially zero for very small $\alpha$, but rises sharply around $\alpha = 0.20$: at $\alpha = 0.20$ the policy issues a treatment recommendation for roughly 73\% of patients (2{,}829 assigned to non-emergent, 6{,}698 to emergent) and abstains on the remaining 27\% (3{,}547 patients). At this operating point, factual coverage remains high at 0.80, and the empirical regret on the decided subset---measured as the absolute difference in estimated risk between the chosen arm and the best arm---is 0 (mean, 90th percentile, and maximum).
+
+In contrast, an XGBoost T-learner trained on the same features achieved a higher AUROC of approximately 0.78, but produced a far more conservative dominance policy. For $\alpha \leq 0.10$, the XGBoost-based policy abstains on all test patients. Even at $\alpha = 0.20$, it makes recommendations for only 23 out of 13{,}074 patients, abstaining on the rest, despite maintaining similar coverage. This illustrates a key point: improving discrimination (AUROC) does not necessarily increase the number of confident treatment recommendations under a dominance rule; more flexible models can produce wide, overlapping intervals that rarely dominate each other.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[width=0.45\textwidth]{../figures/mimic_v3_coverage_vs_alpha.png}
+    \includegraphics[width=0.45\textwidth]{../figures/mimic_v3_decision_frac_vs_alpha.png}
+    \caption{Factual coverage (left) and decision fraction (right) as a function of miscoverage level $\alpha$ on MIMIC-IV v3, for logistic and XGBoost T-learners.}
+    \label{fig:coverage-alpha}
+\end{figure}
+
+\subsection{Subgroup analysis}
+
+To understand how the policy behaves across clinically relevant subgroups, we examined performance for the logistic T-learner at $\alpha = 0.20$ along age, gender, and careunit dimensions.
+
+\paragraph{Age bands.}
+
+We split the test cohort into four age bands $[0, 40)$, $[40, 60)$, $[60, 80)$, $[80, 200)$. In the youngest group, coverage was highest at 0.92, but the policy decided for only about 41\% of patients, abstaining on the majority. As age increased, coverage decreased and the policy became more aggressive: coverage dropped to 0.88 and 0.79 in the [40, 60) and [60, 80) bands, with decision rates around 66--78\%. In the oldest group ([80, 200)), coverage fell further to 0.64, while the policy issued recommendations for roughly 89\% of patients. Across all age bins, the model-based regret on the decided subset remained zero. This pattern suggests that older patients have more clearly separated risk profiles under the model, leading to more frequent dominance, but also that coverage guarantees are weaker in this high-risk group.
+
+\paragraph{Gender.}
+
+When stratifying by gender, behaviour was much more homogeneous. For female patients, coverage was 0.79 and the decision rate was 73\%, compared to 0.80 coverage and 72\% decision rate for male patients; AUROC was modestly higher in males (0.77 vs 0.74). In both groups, the regret among decided patients was zero. These findings indicate that, at least for this feature set and outcome, the dominance-based policy treats genders similarly in terms of how often it acts and how often it abstains.
+
+\paragraph{ICU careunit.}
+
+The largest heterogeneity appears across first ICU careunits. For example, in the Cardiac Vascular Intensive Care Unit, coverage was extremely high (0.96) but the policy abstained on a large fraction of patients, leading to a conservative operating mode. In Neuro Intermediate and Neuro Stepdown units, coverage was even higher ($\approx 0.98$) yet nearly all patients fell into the abstain region: intervals were tight but overlapping, so the dominance rule almost never triggered. In contrast, the Neuro Surgical Intensive Care Unit exhibited low coverage (0.32) and very few abstentions, indicating an aggressive, poorly calibrated regime. Mixed medical and surgical ICUs (MICU, combined medical--surgical ICU, and trauma SICU) fell in between, with moderate coverage (0.67--0.81) and high decision rates.
+
+This heterogeneity suggests that single global hyperparameters may not be appropriate across all care environments, and that careunit-specific tuning or at least careunit-stratified reporting is important when deploying such policies. Overall, the subgroup analysis shows that the proposed dominance-based conformal policy can provide calibrated recommendations and principled abstentions globally, while exposing where its behaviour changes systematically across patient populations and clinical contexts.
+
+\section{Discussion and Future Work}
+
+Our results show that a simple combination of T-learner models and conformal prediction can yield ICU treatment policies that are both selective and calibrated, in the sense that they provide explicit abstentions when the evidence is ambiguous and achieve near-nominal coverage for the underlying risks. On synthetic data with known potential outcomes, the dominance-based policy behaves as expected: it either chooses the truly better arm or abstains, leading to essentially zero regret among decided patients. This gives a strong sanity check that the conformal construction and dominance rule are mathematically sound when model assumptions are satisfied.
+
+On the MIMIC-IV v3 ICU cohort, the empirical picture is more nuanced and clinically interesting. A logistic T-learner, trained on a relatively simple set of demographic and administrative features, attains moderate-to-good discrimination for in-hospital mortality and, when wrapped in the conformal dominance policy, can issue recommendations for roughly three quarters of ICU stays at a reasonable miscoverage level (e.g., $\alpha = 0.20$). At this operating point, the policy maintains high empirical coverage and zero model-based regret among decided patients. This suggests that, even with modest models, one can construct decision rules that are both actionable and conservative: they act when the model is both confident and calibrated, and they abstain otherwise.
+
+Comparing logistic regression to XGBoost highlights an important lesson: higher AUROC does not necessarily translate into a more useful abstaining policy. The XGBoost T-learner attains better discrimination but produces substantially wider and more overlapping conformal intervals, so the dominance condition is rarely satisfied. As a result, the XGBoost-based policy is extremely conservative, abstaining on nearly all patients for $\alpha \le 0.10$ and on almost all patients even at $\alpha = 0.20$. This trade-off between discrimination and dominance-based actionability underscores that model evaluation for decision support should go beyond standard metrics and consider how often, and for whom, the model can confidently recommend one treatment over another.
+
+The subgroup analyses provide further insight into how the policy behaves across patient populations and care environments. Along the age dimension, we see a clear monotone pattern: younger patients enjoy higher coverage but also higher abstention rates, while older patients experience lower coverage and fewer abstentions. One interpretation is that, under the fitted model, the risk profiles of older patients are more clearly separated between emergent and non-emergent admission pathways, leading to more frequent dominance of one arm. At the same time, the lower coverage suggests that the conformal intervals may be miscalibrated in this high-risk region, possibly due to limited sample size, residual confounding, or missing covariates.
+
+By contrast, policy behaviour across gender is remarkably similar: both decision rates and coverage are closely matched between female and male patients, with zero regret among decided cases in both groups. This is encouraging from a basic fairness perspective, although it does not constitute a full fairness analysis. Including gender as a pre-treatment covariate is statistically natural, as it may act as a confounder, but it also necessitates transparent reporting of subgroup performance. Our analysis here is descriptive: we measure how the learned policy behaves across genders rather than enforcing any particular fairness criterion.
+
+The most heterogeneous behaviour appears across ICU careunits. Some units, such as Cardiac Vascular ICU and Neuro Intermediate, operate in a highly conservative regime: coverage is very high, but the policy abstains frequently. Others, such as the Neuro Surgical ICU, exhibit low coverage and few abstentions, indicating an aggressive and potentially miscalibrated regime. Mixed medical--surgical ICUs sit between these extremes. These patterns suggest that a single global choice of miscoverage level $\alpha$ may not be appropriate across all care settings; careunit-specific tuning, or at least stratified reporting and possibly unit-specific policies, may be necessary for deployment.
+
+This study has several limitations. First, the clinical application is based on observational data from a single ICU database. While we adopt a potential-outcomes framing and include standard pre-treatment covariates, we do not claim that our estimates of $r_0(x)$, $r_1(x)$, or the induced policies are causally identified. Unmeasured confounding, selection bias, and time-varying treatment patterns are all plausible in MIMIC-IV v3. The pseudo-regret metrics we report are therefore best interpreted as internal consistency checks rather than causal guarantees.
+
+Second, our implementation deliberately uses simple feature engineering and baseline models. We focus on understanding the behaviour of the conformal dominance policy, not on maximising predictive performance. More expressive architectures (e.g., recurrent or transformer-based models over the full ICU time series) and richer covariate sets may change both the quality of risk estimates and the structure of conformal intervals. Exploring how the abstain/decide trade-off behaves with such models is an important direction for future work.
+
+Third, we study a single binary outcome (in-hospital mortality) and a coarse binary treatment (emergent vs non-emergent admission). Real ICU decisions are multi-stage and multi-dimensional, involving sequences of treatments and competing outcomes (e.g., mortality, length of stay, quality of life). Extending conformal treatment policies to multi-arm or sequential decision problems is non-trivial but would increase clinical relevance.
+
+Fourth, we evaluate on a single dataset from a single health system. External validation on independent cohorts, as well as robustness checks across hospitals and time periods, would be necessary before any real-world deployment. Similarly, we report subgroup behaviour along age, gender, and careunit, but do not exhaustively investigate fairness across all protected attributes or intersectional groups.
+
+Finally, even a perfectly calibrated and selective policy is not, by itself, a decision-maker. In practice, such a system would need to be integrated into clinical workflows, with careful user-interface design, prospective validation, and ongoing monitoring. Our experiments should be viewed as a methodological proof-of-concept: they show that it is possible to construct ICU treatment policies that come with finite-sample uncertainty guarantees and explicit abstentions. Bridging the gap from this proof-of-concept to a deployed system will require close collaboration with clinicians, health-system stakeholders, and ethicists.
+
+Despite these limitations, we believe that dominance-based conformal treatment policies occupy a useful middle ground between pure prediction and fully automated decision-making. They provide a principled way to say ``we are confident enough to recommend action A over action B'' and, equally importantly, to say ``we are not confident enough to decide,'' which is a crucial capability in high-stakes clinical settings.
+
+\section{Conclusion}
+
+We introduced a dominance-based conformal treatment policy that wraps standard potential-outcome models and yields ICU admission recommendations with explicit uncertainty guarantees and an abstain option. Through synthetic experiments and a large-scale study on MIMIC-IV v3, we showed that this approach can achieve high coverage, low regret on decided patients, and meaningful selectivity, while exposing important trade-offs between discrimination, abstention, and subgroup behaviour. We hope this work contributes to a broader shift from pure prediction toward calibrated, abstaining decision-support tools in critical care.
+
