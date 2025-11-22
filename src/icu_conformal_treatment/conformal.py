@@ -1,8 +1,8 @@
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.preprocessing import StandardScaler
 
@@ -11,7 +11,7 @@ def conformal_quantile(scores: np.ndarray, alpha: float) -> float:
     scores_sorted = np.sort(scores)
     n = len(scores_sorted)
     if n == 0:
-        raise ValueError("No scores provided for conformal quantile")
+        raise ValueError("No scores for conformal quantile")
     k = int(np.ceil((n + 1) * (1.0 - alpha))) - 1
     k = max(0, min(k, n - 1))
     return float(scores_sorted[k])
@@ -23,19 +23,18 @@ def fit_tlearner_logreg(
     y_train: pd.Series,
 ) -> Tuple[StandardScaler, LogisticRegression, LogisticRegression]:
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_scaled = scaler.fit_transform(X_train)
 
     mask_t0 = t_train == 0
     mask_t1 = t_train == 1
-
     if mask_t0.sum() == 0 or mask_t1.sum() == 0:
-        raise ValueError("One of the treatment groups is empty in training data")
+        raise ValueError("Empty treatment group in training")
 
     clf_t0 = LogisticRegression(max_iter=1000)
     clf_t1 = LogisticRegression(max_iter=1000)
 
-    clf_t0.fit(X_train_scaled[mask_t0], y_train[mask_t0])
-    clf_t1.fit(X_train_scaled[mask_t1], y_train[mask_t1])
+    clf_t0.fit(X_scaled[mask_t0], y_train[mask_t0])
+    clf_t1.fit(X_scaled[mask_t1], y_train[mask_t1])
 
     return scaler, clf_t0, clf_t1
 
@@ -48,13 +47,12 @@ def fit_tlearner_xgboost(
     from xgboost import XGBClassifier
 
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_scaled = scaler.fit_transform(X_train)
 
     mask_t0 = t_train == 0
     mask_t1 = t_train == 1
-
     if mask_t0.sum() == 0 or mask_t1.sum() == 0:
-        raise ValueError("One of the treatment groups is empty in training data")
+        raise ValueError("Empty treatment group in training")
 
     clf_t0 = XGBClassifier(
         max_depth=4,
@@ -79,8 +77,8 @@ def fit_tlearner_xgboost(
         tree_method="hist",
     )
 
-    clf_t0.fit(X_train_scaled[mask_t0], y_train[mask_t0])
-    clf_t1.fit(X_train_scaled[mask_t1], y_train[mask_t1])
+    clf_t0.fit(X_scaled[mask_t0], y_train[mask_t0])
+    clf_t1.fit(X_scaled[mask_t1], y_train[mask_t1])
 
     return scaler, clf_t0, clf_t1
 
@@ -91,38 +89,37 @@ def fit_tlearner_regression(
     y_train: pd.Series,
 ) -> Tuple[StandardScaler, LinearRegression, LinearRegression]:
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_scaled = scaler.fit_transform(X_train)
 
     mask_t0 = t_train == 0
     mask_t1 = t_train == 1
-
     if mask_t0.sum() == 0 or mask_t1.sum() == 0:
-        raise ValueError("One of the treatment groups is empty in training data")
+        raise ValueError("Empty treatment group in training")
 
     reg_t0 = LinearRegression()
     reg_t1 = LinearRegression()
 
-    reg_t0.fit(X_train_scaled[mask_t0], y_train[mask_t0])
-    reg_t1.fit(X_train_scaled[mask_t1], y_train[mask_t1])
+    reg_t0.fit(X_scaled[mask_t0], y_train[mask_t0])
+    reg_t1.fit(X_scaled[mask_t1], y_train[mask_t1])
 
     return scaler, reg_t0, reg_t1
 
 
 def compute_nonconformity_scores(
     y_true: np.ndarray,
-    y_prob: np.ndarray,
+    y_pred: np.ndarray,
     score_type: str = "residual",
 ) -> np.ndarray:
     if score_type == "residual":
-        return np.abs(y_true - y_prob)
+        return np.abs(y_true - y_pred)
     if score_type == "nll":
         eps = 1e-6
-        p = np.clip(y_prob, eps, 1.0 - eps)
+        p = np.clip(y_pred, eps, 1.0 - eps)
         return -(y_true * np.log(p) + (1.0 - y_true) * np.log(1.0 - p))
     raise ValueError(f"Unknown score_type: {score_type}")
 
 
-def compute_conformal_scores(
+def _compute_conformal_scores_classifier(
     scaler: StandardScaler,
     clf_t0,
     clf_t1,
@@ -131,27 +128,27 @@ def compute_conformal_scores(
     y_calib: pd.Series,
     score_type: str = "residual",
 ) -> Tuple[np.ndarray, np.ndarray]:
-    X_calib_scaled = scaler.transform(X_calib)
+    X_scaled = scaler.transform(X_calib)
 
-    y_prob_calib_t0 = np.zeros(len(y_calib), dtype=float)
-    y_prob_calib_t1 = np.zeros(len(y_calib), dtype=float)
+    y_prob_t0 = np.zeros(len(y_calib), dtype=float)
+    y_prob_t1 = np.zeros(len(y_calib), dtype=float)
 
-    mask_t0_calib = t_calib == 0
-    mask_t1_calib = t_calib == 1
+    mask_t0 = t_calib == 0
+    mask_t1 = t_calib == 1
 
-    if mask_t0_calib.any():
-        y_prob_calib_t0[mask_t0_calib] = clf_t0.predict_proba(X_calib_scaled[mask_t0_calib])[:, 1]
-    if mask_t1_calib.any():
-        y_prob_calib_t1[mask_t1_calib] = clf_t1.predict_proba(X_calib_scaled[mask_t1_calib])[:, 1]
+    if mask_t0.any():
+        y_prob_t0[mask_t0] = clf_t0.predict_proba(X_scaled[mask_t0])[:, 1]
+    if mask_t1.any():
+        y_prob_t1[mask_t1] = clf_t1.predict_proba(X_scaled[mask_t1])[:, 1]
 
     scores_t0 = compute_nonconformity_scores(
-        y_true=y_calib[mask_t0_calib].to_numpy(),
-        y_prob=y_prob_calib_t0[mask_t0_calib],
+        y_true=y_calib[mask_t0].to_numpy(),
+        y_pred=y_prob_t0[mask_t0],
         score_type=score_type,
     )
     scores_t1 = compute_nonconformity_scores(
-        y_true=y_calib[mask_t1_calib].to_numpy(),
-        y_prob=y_prob_calib_t1[mask_t1_calib],
+        y_true=y_calib[mask_t1].to_numpy(),
+        y_pred=y_prob_t1[mask_t1],
         score_type=score_type,
     )
 
@@ -172,7 +169,7 @@ def tlearner_conformal_potential_outcomes(
 ) -> Dict[str, Any]:
     scaler, clf_t0, clf_t1 = fit_tlearner_logreg(X_train, t_train, y_train)
 
-    scores_t0, scores_t1 = compute_conformal_scores(
+    scores_t0, scores_t1 = _compute_conformal_scores_classifier(
         scaler=scaler,
         clf_t0=clf_t0,
         clf_t1=clf_t1,
@@ -231,7 +228,7 @@ def tlearner_conformal_potential_outcomes_xgb(
 ) -> Dict[str, Any]:
     scaler, clf_t0, clf_t1 = fit_tlearner_xgboost(X_train, t_train, y_train)
 
-    scores_t0, scores_t1 = compute_conformal_scores(
+    scores_t0, scores_t1 = _compute_conformal_scores_classifier(
         scaler=scaler,
         clf_t0=clf_t0,
         clf_t1=clf_t1,
@@ -256,7 +253,7 @@ def tlearner_conformal_potential_outcomes_xgb(
     elif score_type == "nll":
         L0 = np.zeros_like(y_prob_test_t0)
         U0 = np.ones_like(y_prob_test_t0)
-        L1 = np.zeros_like(y_prob_test_t1)
+        L1 = np.zeros_like	y_prob_test_t1)
         U1 = np.ones_like(y_prob_test_t1)
     else:
         raise ValueError(f"Unknown score_type: {score_type}")
@@ -294,17 +291,17 @@ def tlearner_conformal_potential_outcomes_regression(
     y_hat_calib_t0 = reg_t0.predict(X_calib_scaled)
     y_hat_calib_t1 = reg_t1.predict(X_calib_scaled)
 
-    mask_t0_calib = t_calib == 0
-    mask_t1_calib = t_calib == 1
+    mask_t0 = t_calib == 0
+    mask_t1 = t_calib == 1
 
     scores_t0 = compute_nonconformity_scores(
-        y_true=y_calib[mask_t0_calib].to_numpy(),
-        y_prob=y_hat_calib_t0[mask_t0_calib],
+        y_true=y_calib[mask_t0].to_numpy(),
+        y_pred=y_hat_calib_t0[mask_t0],
         score_type=score_type,
     )
     scores_t1 = compute_nonconformity_scores(
-        y_true=y_calib[mask_t1_calib].to_numpy(),
-        y_prob=y_hat_calib_t1[mask_t1_calib],
+        y_true=y_calib[mask_t1].to_numpy(),
+        y_pred=y_hat_calib_t1[mask_t1],
         score_type=score_type,
     )
 
@@ -322,9 +319,9 @@ def tlearner_conformal_potential_outcomes_regression(
         L0 = np.clip(y_hat_test_t0 - q0, 0.0, 1.0)
         U0 = np.clip(y_hat_test_t0 + q0, 0.0, 1.0)
         L1 = np.clip(y_hat_test_t1 - q1, 0.0, 1.0)
-        U1 = np.clip(y_hat_test_t1 + q1, 0.0, 1.0)
+        U1 = np.clip	y_hat_test_t1 + q1, 0.0, 1.0)
     else:
-        raise ValueError(f"Unsupported score_type for regression: {score_type}")
+        raise ValueError("Unsupported score_type for regression")
 
     return {
         "scaler": scaler,
@@ -351,20 +348,20 @@ def dominance_policy_metrics(
     t_test: pd.Series,
     y_test: pd.Series,
 ) -> Dict[str, Any]:
-    y_test_arr = y_test.to_numpy()
-    t_test_arr = t_test.to_numpy()
+    y_arr = y_test.to_numpy()
+    t_arr = t_test.to_numpy()
 
     widths0 = U0 - L0
     widths1 = U1 - L1
 
-    factual_L = np.where(t_test_arr == 0, L0, L1)
-    factual_U = np.where(t_test_arr == 0, U0, U1)
-    coverage_factual = ((y_test_arr >= factual_L) & (y_test_arr <= factual_U)).mean()
+    factual_L = np.where(t_arr == 0, L0, L1)
+    factual_U = np.where(t_arr == 0, U0, U1)
+    coverage_factual = ((y_arr >= factual_L) & (y_arr <= factual_U)).mean()
 
-    y_prob_factual = np.where(t_test_arr == 0, y_prob_test_t0, y_prob_test_t1)
+    y_prob_factual = np.where(t_arr == 0, y_prob_test_t0, y_prob_test_t1)
     try:
-        if np.unique(y_test_arr).shape[0] > 1:
-            auc_factual = roc_auc_score(y_test_arr, y_prob_factual)
+        if np.unique(y_arr).shape[0] > 1:
+            auc_factual = roc_auc_score(y_arr, y_prob_factual)
         else:
             auc_factual = float("nan")
     except Exception:
@@ -374,14 +371,14 @@ def dominance_policy_metrics(
     choose_t0 = U0 < L1
     abstain = ~(choose_t0 | choose_t1)
 
-    n = len(y_test_arr)
-    n_t1 = int(choose_t1.sum())
+    n = len(y_arr)
     n_t0 = int(choose_t0.sum())
+    n_t1 = int(choose_t1.sum())
     n_abstain = int(abstain.sum())
 
     risk_best = np.minimum(y_prob_test_t0, y_prob_test_t1)
-
     decided_mask = ~abstain
+
     risk_decision = np.zeros(n, dtype=float)
     risk_decision[choose_t0] = y_prob_test_t0[choose_t0]
     risk_decision[choose_t1] = y_prob_test_t1[choose_t1]
