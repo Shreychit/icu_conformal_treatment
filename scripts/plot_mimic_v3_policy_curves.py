@@ -52,12 +52,8 @@ def main() -> None:
     df_logreg = load_sweep("mimic_v3_conformal_policy_alpha_sweep.parquet")
     df_xgb = load_sweep("mimic_v3_conformal_policy_alpha_sweep_xgboost.parquet")
 
-    cfg = load_project_config()
-    project_root = Path(cfg["project_root"])
-    out_dir = project_root / "figures"
-
+    out_dir = Path.cwd() / "figures"
     plot_curves(df_logreg, df_xgb, out_dir)
-
     print("Saved plots to:", out_dir)
 
 
