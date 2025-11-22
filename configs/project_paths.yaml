@@ -5,3 +5,7 @@ data:
 mimic:
   root_dir: "data/raw/mimiciv_demo_2_2/mimic-iv-clinical-database-demo-2.2"
   cohort_table: "data/processed/mimiciv_demo_cohort.parquet"
+
+mimic_full:
+  root_dir: "data/raw/mimiciv_v3_0/mimic-iv-3.0"
+  cohort_table: "data/processed/mimiciv_v3_cohort.parquet"
