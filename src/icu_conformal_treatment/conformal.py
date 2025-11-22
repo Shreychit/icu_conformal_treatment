@@ -17,6 +17,20 @@ def conformal_quantile(scores: np.ndarray, alpha: float) -> float:
     return float(scores_sorted[k])
 
 
+def compute_nonconformity_scores(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    score_type: str = "residual",
+) -> np.ndarray:
+    if score_type == "residual":
+        return np.abs(y_true - y_pred)
+    if score_type == "nll":
+        eps = 1e-6
+        p = np.clip(y_pred, eps, 1.0 - eps)
+        return -(y_true * np.log(p) + (1.0 - y_true) * np.log(1.0 - p))
+    raise ValueError(f"Unknown score_type: {score_type}")
+
+
 def fit_tlearner_logreg(
     X_train: pd.DataFrame,
     t_train: pd.Series,
@@ -54,7 +68,7 @@ def fit_tlearner_xgboost(
     if mask_t0.sum() == 0 or mask_t1.sum() == 0:
         raise ValueError("Empty treatment group in training")
 
-    clf_t0 = XGBClassifier(
+    params = dict(
         max_depth=4,
         n_estimators=200,
         learning_rate=0.05,
@@ -65,17 +79,9 @@ def fit_tlearner_xgboost(
         n_jobs=-1,
         tree_method="hist",
     )
-    clf_t1 = XGBClassifier(
-        max_depth=4,
-        n_estimators=200,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=1.0,
-        eval_metric="logloss",
-        n_jobs=-1,
-        tree_method="hist",
-    )
+
+    clf_t0 = XGBClassifier(**params)
+    clf_t1 = XGBClassifier(**params)
 
     clf_t0.fit(X_scaled[mask_t0], y_train[mask_t0])
     clf_t1.fit(X_scaled[mask_t1], y_train[mask_t1])
@@ -103,20 +109,6 @@ def fit_tlearner_regression(
     reg_t1.fit(X_scaled[mask_t1], y_train[mask_t1])
 
     return scaler, reg_t0, reg_t1
-
-
-def compute_nonconformity_scores(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    score_type: str = "residual",
-) -> np.ndarray:
-    if score_type == "residual":
-        return np.abs(y_true - y_pred)
-    if score_type == "nll":
-        eps = 1e-6
-        p = np.clip(y_pred, eps, 1.0 - eps)
-        return -(y_true * np.log(p) + (1.0 - y_true) * np.log(1.0 - p))
-    raise ValueError(f"Unknown score_type: {score_type}")
 
 
 def _compute_conformal_scores_classifier(
@@ -319,7 +311,7 @@ def tlearner_conformal_potential_outcomes_regression(
         L0 = np.clip(y_hat_test_t0 - q0, 0.0, 1.0)
         U0 = np.clip(y_hat_test_t0 + q0, 0.0, 1.0)
         L1 = np.clip(y_hat_test_t1 - q1, 0.0, 1.0)
-        U1 = np.clip	y_hat_test_t1 + q1, 0.0, 1.0)
+        U1 = np.clip(y_hat_test_t1 + q1, 0.0, 1.0)
     else:
         raise ValueError("Unsupported score_type for regression")
 
