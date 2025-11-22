@@ -6,6 +6,21 @@ from icu_conformal_treatment.config import load_project_config
 from icu_conformal_treatment.data_utils import ensure_dir
 
 
+def _resolve_table(path: Path) -> Path:
+    """Return an existing CSV or compressed CSV path."""
+    if path.exists():
+        return path
+
+    gz_path = path.with_suffix(path.suffix + ".gz")
+    if gz_path.exists():
+        return gz_path
+
+    raise FileNotFoundError(
+        f"Could not find {path} or compressed {gz_path}. "
+        "Update configs/project_paths.yaml to point to the MIMIC-IV v3 tables."
+    )
+
+
 def main() -> None:
     cfg = load_project_config()
     mimic_cfg = cfg["mimic_full"]
@@ -14,9 +29,9 @@ def main() -> None:
     out_path = Path(mimic_cfg["cohort_table"])
     ensure_dir(str(out_path.parent))
 
-    hosp_adm_path = root_dir / "hosp" / "admissions.csv"
-    hosp_pat_path = root_dir / "hosp" / "patients.csv"
-    icu_stay_path = root_dir / "icu" / "icustays.csv"
+    hosp_adm_path = _resolve_table(root_dir / "hosp" / "admissions.csv")
+    hosp_pat_path = _resolve_table(root_dir / "hosp" / "patients.csv")
+    icu_stay_path = _resolve_table(root_dir / "icu" / "icustays.csv")
 
     print(f"Loading admissions from {hosp_adm_path}")
     admissions = pd.read_csv(hosp_adm_path)

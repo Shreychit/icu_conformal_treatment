@@ -1,0 +1,2 @@
+group_type,group_label,mean_width_t0,mean_width_t1,coverage_factual,auc_factual,n_test,n_decide_t0,n_decide_t1,n_abstain,mean_regret_decided,p90_regret_decided,max_regret_decided
+global,all,0.20258468951488887,0.3738978148474949,0.7957778797613584,0.7565627469091388,13074,2829,6698,3547,0.0,0.0,0.0
