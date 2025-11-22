@@ -249,11 +249,11 @@ def tlearner_conformal_potential_outcomes_xgb(
         L0 = np.clip(y_prob_test_t0 - q0, 0.0, 1.0)
         U0 = np.clip(y_prob_test_t0 + q0, 0.0, 1.0)
         L1 = np.clip(y_prob_test_t1 - q1, 0.0, 1.0)
-        U1 = np.clip	y_prob_test_t1 + q1, 0.0, 1.0)
+        U1 = np.clip(y_prob_test_t1 + q1, 0.0, 1.0)
     elif score_type == "nll":
         L0 = np.zeros_like(y_prob_test_t0)
         U0 = np.ones_like(y_prob_test_t0)
-        L1 = np.zeros_like	y_prob_test_t1)
+        L1 = np.zeros_like(y_prob_test_t1)
         U1 = np.ones_like(y_prob_test_t1)
     else:
         raise ValueError(f"Unknown score_type: {score_type}")
