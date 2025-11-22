@@ -76,6 +76,10 @@ def main() -> None:
     for c in cat_cols:
         X_raw[c] = X_raw[c].fillna("UNKNOWN")
 
+    for c in num_cols:
+        median_val = X_raw[c].median()
+        X_raw[c] = X_raw[c].fillna(median_val)
+
     X = pd.get_dummies(X_raw, columns=cat_cols, drop_first=False)
 
     df_all = X.copy()
